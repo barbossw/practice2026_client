@@ -4,6 +4,7 @@ import websockets
 from websockets.protocol import State
 import json
 import sys
+import time
 import math
 
 
@@ -90,7 +91,6 @@ async def main():
 
             try:
                 async with websockets.connect(uri) as websocket:
-                    print("Успешное подключение! Ожидание второго игрока...")
                     app_state = "PLAYING"
                     
                     game_state = {
@@ -100,72 +100,107 @@ async def main():
                         "score": {"first": 0, "second": 0}
                     }
                     
-                    # === ДОБАВЛЕННЫЕ ПЕРЕМЕННЫЕ ДЛЯ ИНЕРЦИИ ===
                     paddle_x = SCREEN_WIDTH // 2
                     paddle_y = SCREEN_HEIGHT - 100
                     paddle_vx = 0.0
                     paddle_vy = 0.0
                     is_dragging = False
 
+                    connection_info = {
+                        "last_packet_time": time.time(),
+                        "disconnect_reason": None,
+                        "game_started": False 
+                    }
+
                     async def receive_messages():
                         try:
                             async for message in websocket:
                                 data = json.loads(message)
                                 if data.get("type") == "GameState":
+                                    connection_info["game_started"] = True
+                                    connection_info["last_packet_time"] = time.time()
                                     game_state.update(data["data"])
                                 elif data.get("type") == "Message":
-                                    print(f"Сообщение: {data.get('data')}")
+                                    msg = data.get("data", "")
+                                    print(f"Сообщение от сервера: {msg}")
+                                    if "stop" in msg.lower() or "disconnect" in msg.lower() or "reached" in msg.lower():
+                                        connection_info["disconnect_reason"] = "Игра остановлена сервером!"
                         except websockets.exceptions.ConnectionClosed:
-                            print("Соединение разорвано. Возврат в меню.")
+                            if connection_info["disconnect_reason"] is None:
+                                connection_info["disconnect_reason"] = "Соединение разорвано сервером!"
+                        except asyncio.CancelledError:
+                            pass
                             
                     receive_task = asyncio.create_task(receive_messages())
 
                     while app_state == "PLAYING":
-                        if receive_task.done():
-                            app_state = "MENU"
-                            break
+                        # 1. Проверяем причины для отключения
+                        if connection_info["disconnect_reason"] is not None:
+                            app_state = "DISCONNECTED_SCREEN"
+                            # ЯВНО ЗАКРЫВАЕМ СОКЕТ
+                            if websocket.state == State.OPEN:
+                                await websocket.close()
+                            break 
 
-                        # 1. Обработка событий Pygame
+                        # Проверяем таймаут (если второй игрок вышел или сервер завис)
+                        if connection_info["game_started"]:
+                            if time.time() - connection_info["last_packet_time"] > 1.5:
+                                connection_info["disconnect_reason"] = "Оппонент отключился!"
+                                app_state = "DISCONNECTED_SCREEN"
+                                # ЯВНО ЗАКРЫВАЕМ СОКЕТ, чтобы освободить свой слот!
+                                if websocket.state == State.OPEN:
+                                    await websocket.close()
+                                break 
+
+                        # 2. Обработка событий
                         for event in pygame.event.get():
                             if event.type == pygame.QUIT:
-                                receive_task.cancel()
+                                # ВАЖНО: Закрываем сокет перед sys.exit()
+                                if websocket.state == State.OPEN:
+                                    await websocket.close()
                                 pygame.quit()
                                 sys.exit()
                             
-                            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                                mouse_x, mouse_y = event.pos
-                                # Теперь проверяем дистанцию по локальным координатам биты
-                                distance = math.hypot(mouse_x - paddle_x, mouse_y - paddle_y)
-                                if distance <= PLAYER_RADIUS:
-                                    is_dragging = True
+                            # Выход в меню через ESCAPE
+                            if event.type == pygame.KEYDOWN:
+                                if event.key == pygame.K_ESCAPE:
+                                    connection_info["disconnect_reason"] = "Вы вышли в меню"
+                                    app_state = "DISCONNECTED_SCREEN"
+                                    # ЯВНО ЗАКРЫВАЕМ СОКЕТ
+                                    if websocket.state == State.OPEN:
+                                        await websocket.close()
+                                    break 
 
-                            if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                                is_dragging = False
+                            if connection_info["game_started"]:
+                                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                                    mouse_x, mouse_y = event.pos
+                                    distance = math.hypot(mouse_x - paddle_x, mouse_y - paddle_y)
+                                    if distance <= PLAYER_RADIUS:
+                                        is_dragging = True
 
-                        # 2. Логика перемещения и инерции
-                        if is_dragging:
+                                if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                                    is_dragging = False
+
+                        # Если вышли по ESC, прерываем игровой цикл
+                        if app_state != "PLAYING":
+                            break
+
+                        # 3. Физика биты
+                        if is_dragging and connection_info["game_started"]:
                             mouse_x, mouse_y = pygame.mouse.get_pos()
-                            
-                            # Скорость — это разница между новым положением мыши и прошлым положением биты
                             paddle_vx = mouse_x - paddle_x
                             paddle_vy = mouse_y - paddle_y
-                            
                             paddle_x = mouse_x
                             paddle_y = mouse_y
                         else:
-                            # Мышь отпущена -> применяем инерцию
                             paddle_x += paddle_vx
                             paddle_y += paddle_vy
-                            
-                            # Трение (каждый кадр скорость падает)
                             paddle_vx *= 0.92
                             paddle_vy *= 0.92
-                            
-                            # Чтобы бита не дергалась на микро-скоростях, полностью её останавливаем
                             if abs(paddle_vx) < 0.1: paddle_vx = 0
                             if abs(paddle_vy) < 0.1: paddle_vy = 0
 
-                        # 3. Ограничения (чтобы не улететь за стены и на чужую половину)
+                        # Ограничения движения
                         if paddle_x < PLAYER_RADIUS:
                             paddle_x = PLAYER_RADIUS
                             paddle_vx = 0
@@ -180,16 +215,14 @@ async def main():
                             paddle_y = SCREEN_HEIGHT - PLAYER_RADIUS
                             paddle_vy = 0
 
-                        # 4. Отправка рассчитанных координат на сервер
+                        # 4. Отправка пакетов
                         try:
                             server_x, server_y = to_server_coords(paddle_x, paddle_y)
                             payload = {"position": {"x": server_x, "y": server_y}}
-
                             if websocket.state == State.OPEN:
                                 await websocket.send(json.dumps(payload))
                         except websockets.exceptions.ConnectionClosed:
-                            app_state = "MENU"
-                            break
+                            pass 
 
                         # 5. Отрисовка
                         screen.fill(COLOR_BG)
@@ -199,26 +232,29 @@ async def main():
                         puck_pos = game_state["puck"]["position"]
                         score = game_state["score"]
 
-                        # Отрисовка Player 1 (Вы) - Теперь рисуется по локальным координатам (идеально плавно!)
                         outline_width = 0 if is_dragging else 3
                         pygame.draw.circle(screen, COLOR_PLAYER1, (int(paddle_x), int(paddle_y)), PLAYER_RADIUS)
                         pygame.draw.circle(screen, (0, 0, 139), (int(paddle_x), int(paddle_y)), PLAYER_RADIUS, outline_width)
 
-                        # Отрисовка Player 2 (Оппонент берется с сервера)
                         p2_x, p2_y = to_screen_coords(p2_pos["first"], p2_pos["second"])
                         pygame.draw.circle(screen, COLOR_PLAYER2, (p2_x, p2_y), PLAYER_RADIUS)
 
-                        # Отрисовка Шайбы (берется с сервера)
                         puck_x, puck_y = to_screen_coords(puck_pos["first"], puck_pos["second"])
                         pygame.draw.circle(screen, COLOR_PUCK, (puck_x, puck_y), PUCK_RADIUS)
 
-                        # Отрисовка Счета
-                        score_text = font.render(f"{score['first']} - {score['second']}", True, COLOR_TEXT)
-                        screen.blit(score_text, (SCREEN_WIDTH // 2 - score_text.get_width() // 2, 20))
+                        if not connection_info["game_started"]:
+                            wait_bg = wait_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
+                            pygame.draw.rect(screen, COLOR_BG, wait_bg.inflate(20, 20))
+                            screen.blit(wait_text, wait_bg)
+                        else:
+                            score_text = font.render(f"{score['first']} - {score['second']}", True, COLOR_TEXT)
+                            screen.blit(score_text, (SCREEN_WIDTH // 2 - score_text.get_width() // 2, 20))
 
                         pygame.display.flip()
                         await asyncio.sleep(0.016)
-
+                
+                # Отменяем фоновую задачу только после того, как сокет гарантированно закрыт
+                if not receive_task.done():
                     receive_task.cancel()
 
             except ConnectionRefusedError:
@@ -228,6 +264,35 @@ async def main():
             except Exception as e:
                 print(f"Ошибка: {e}")
                 app_state = "MENU"
+                await asyncio.sleep(1)
+            # === НОВОЕ СОСТОЯНИЕ ДЛЯ ЭКРАНА ОТКЛЮЧЕНИЯ ===
+        elif app_state == "DISCONNECTED_SCREEN":
+            # Запоминаем время начала показа экрана
+            start_time = time.time()
+            
+            # Крутим цикл ровно 2 секунды, чтобы Pygame не зависал
+            while time.time() - start_time < 2.0:
+                # Обязательно обрабатываем события, иначе окно "крашнется"
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        sys.exit()
+
+                screen.fill(COLOR_BG)
+                
+                # Причина отключения
+                msg_text = small_font.render(connection_info.get("disconnect_reason", "Игра окончена!"), True, (220, 20, 60))
+                screen.blit(msg_text, (SCREEN_WIDTH // 2 - msg_text.get_width() // 2, SCREEN_HEIGHT // 2 - 20))
+                
+                # Текст возврата
+                return_text = small_font.render("Возврат в меню...", True, COLOR_TEXT)
+                screen.blit(return_text, (SCREEN_WIDTH // 2 - return_text.get_width() // 2, SCREEN_HEIGHT // 2 + 20))
+                
+                pygame.display.flip()
+                await asyncio.sleep(0.016) # Пауза в 1 кадр
+            
+            # После 2 секунд плавно возвращаемся в меню
+            app_state = "MENU"
 
 if __name__ == "__main__":
     asyncio.run(main())
