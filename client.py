@@ -3,6 +3,7 @@ import websockets
 import json
 import pygame
 import sys
+from websockets.protocol import State
 
 # Server Constants Map & Screen Dimensions
 # X: -200 to 200 (width = 400)
@@ -99,7 +100,7 @@ async def main(server_uri="wss://practice2026-qw8b.onrender.com/ws_connect"):
         sx, sy = to_server(mx, my)
 
         # Transmit latest position to the server
-        if ws and ws.open:
+        if ws and ws.state == State.OPEN:
             try:
                 await ws.send(json.dumps({
                     "position": {"x": sx, "y": sy}
@@ -145,7 +146,7 @@ async def main(server_uri="wss://practice2026-qw8b.onrender.com/ws_connect"):
         score_text = font.render(f"{score_p2}   -   {score_p1}", True, LINE_COLOR)
         screen.blit(score_text, (WIDTH//2 - score_text.get_width()//2, HEIGHT//2 - score_text.get_height()//2))
         
-        if not ws or not ws.open:
+        if not ws or not ws.state == State.OPEN:
             warn_text = small_font.render("Connecting/Offline", True, RED)
             screen.blit(warn_text, (5, 5))
 
