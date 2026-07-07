@@ -99,12 +99,14 @@ async def main():
                         "puck": {"position": {"first": 0.0, "second": 0.0}},
                         "score": {"first": 0, "second": 0}
                     }
+                    
+                    # === ДОБАВЛЕННЫЕ ПЕРЕМЕННЫЕ ДЛЯ ИНЕРЦИИ ===
+                    paddle_x = SCREEN_WIDTH // 2
+                    paddle_y = SCREEN_HEIGHT - 100
+                    paddle_vx = 0.0
+                    paddle_vy = 0.0
                     is_dragging = False
 
-                    # ---------------------------------------------------------
-                    # ФОНОВАЯ ЗАДАЧА ДЛЯ ЧТЕНИЯ ДАННЫХ
-                    # Она работает параллельно и больше не тормозит отрисовку
-                    # ---------------------------------------------------------
                     async def receive_messages():
                         try:
                             async for message in websocket:
@@ -116,12 +118,9 @@ async def main():
                         except websockets.exceptions.ConnectionClosed:
                             print("Соединение разорвано. Возврат в меню.")
                             
-                    # Запускаем чтение в фоне
                     receive_task = asyncio.create_task(receive_messages())
 
-                    # Основной игровой цикл
                     while app_state == "PLAYING":
-                        # Проверяем, не закрылось ли соединение в фоновой задаче
                         if receive_task.done():
                             app_state = "MENU"
                             break
@@ -135,69 +134,91 @@ async def main():
                             
                             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                                 mouse_x, mouse_y = event.pos
-                                p1_pos = game_state["player1"]["position"]
-                                p1_screen_x, p1_screen_y = to_screen_coords(p1_pos["first"], p1_pos["second"])
-                                
-                                distance = math.hypot(mouse_x - p1_screen_x, mouse_y - p1_screen_y)
+                                # Теперь проверяем дистанцию по локальным координатам биты
+                                distance = math.hypot(mouse_x - paddle_x, mouse_y - paddle_y)
                                 if distance <= PLAYER_RADIUS:
                                     is_dragging = True
 
                             if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                                 is_dragging = False
 
-                        # 2. Логика отправки координат (теперь не тормозит)
-                        try:
-                            if is_dragging:
-                                mouse_x, mouse_y = pygame.mouse.get_pos()
-                                if mouse_y < SCREEN_HEIGHT // 2:
-                                    mouse_y = SCREEN_HEIGHT // 2
+                        # 2. Логика перемещения и инерции
+                        if is_dragging:
+                            mouse_x, mouse_y = pygame.mouse.get_pos()
+                            
+                            # Скорость — это разница между новым положением мыши и прошлым положением биты
+                            paddle_vx = mouse_x - paddle_x
+                            paddle_vy = mouse_y - paddle_y
+                            
+                            paddle_x = mouse_x
+                            paddle_y = mouse_y
+                        else:
+                            # Мышь отпущена -> применяем инерцию
+                            paddle_x += paddle_vx
+                            paddle_y += paddle_vy
+                            
+                            # Трение (каждый кадр скорость падает)
+                            paddle_vx *= 0.92
+                            paddle_vy *= 0.92
+                            
+                            # Чтобы бита не дергалась на микро-скоростях, полностью её останавливаем
+                            if abs(paddle_vx) < 0.1: paddle_vx = 0
+                            if abs(paddle_vy) < 0.1: paddle_vy = 0
 
-                                server_x, server_y = to_server_coords(mouse_x, mouse_y)
-                                payload = {"position": {"x": server_x, "y": server_y}}
-                            else:
-                                p1_pos = game_state["player1"]["position"]
-                                payload = {"position": {"x": p1_pos["first"], "y": p1_pos["second"]}}
+                        # 3. Ограничения (чтобы не улететь за стены и на чужую половину)
+                        if paddle_x < PLAYER_RADIUS:
+                            paddle_x = PLAYER_RADIUS
+                            paddle_vx = 0
+                        elif paddle_x > SCREEN_WIDTH - PLAYER_RADIUS:
+                            paddle_x = SCREEN_WIDTH - PLAYER_RADIUS
+                            paddle_vx = 0
+                            
+                        if paddle_y < SCREEN_HEIGHT // 2 + PLAYER_RADIUS:
+                            paddle_y = SCREEN_HEIGHT // 2 + PLAYER_RADIUS
+                            paddle_vy = 0
+                        elif paddle_y > SCREEN_HEIGHT - PLAYER_RADIUS:
+                            paddle_y = SCREEN_HEIGHT - PLAYER_RADIUS
+                            paddle_vy = 0
+
+                        # 4. Отправка рассчитанных координат на сервер
+                        try:
+                            server_x, server_y = to_server_coords(paddle_x, paddle_y)
+                            payload = {"position": {"x": server_x, "y": server_y}}
 
                             if websocket.state == State.OPEN:
                                 await websocket.send(json.dumps(payload))
-                                
                         except websockets.exceptions.ConnectionClosed:
                             app_state = "MENU"
                             break
 
-                        # 3. Отрисовка
+                        # 5. Отрисовка
                         screen.fill(COLOR_BG)
                         pygame.draw.line(screen, COLOR_LINE, (0, SCREEN_HEIGHT // 2), (SCREEN_WIDTH, SCREEN_HEIGHT // 2), 3)
 
-                        p1_pos = game_state["player1"]["position"]
                         p2_pos = game_state["player2"]["position"]
                         puck_pos = game_state["puck"]["position"]
                         score = game_state["score"]
 
-                        # Player 1
-                        p1_x, p1_y = to_screen_coords(p1_pos["first"], p1_pos["second"])
+                        # Отрисовка Player 1 (Вы) - Теперь рисуется по локальным координатам (идеально плавно!)
                         outline_width = 0 if is_dragging else 3
-                        pygame.draw.circle(screen, COLOR_PLAYER1, (p1_x, p1_y), PLAYER_RADIUS)
-                        pygame.draw.circle(screen, (0, 0, 139), (p1_x, p1_y), PLAYER_RADIUS, outline_width)
+                        pygame.draw.circle(screen, COLOR_PLAYER1, (int(paddle_x), int(paddle_y)), PLAYER_RADIUS)
+                        pygame.draw.circle(screen, (0, 0, 139), (int(paddle_x), int(paddle_y)), PLAYER_RADIUS, outline_width)
 
-                        # Player 2
+                        # Отрисовка Player 2 (Оппонент берется с сервера)
                         p2_x, p2_y = to_screen_coords(p2_pos["first"], p2_pos["second"])
                         pygame.draw.circle(screen, COLOR_PLAYER2, (p2_x, p2_y), PLAYER_RADIUS)
 
-                        # Puck
+                        # Отрисовка Шайбы (берется с сервера)
                         puck_x, puck_y = to_screen_coords(puck_pos["first"], puck_pos["second"])
                         pygame.draw.circle(screen, COLOR_PUCK, (puck_x, puck_y), PUCK_RADIUS)
 
-                        # Score
+                        # Отрисовка Счета
                         score_text = font.render(f"{score['first']} - {score['second']}", True, COLOR_TEXT)
                         screen.blit(score_text, (SCREEN_WIDTH // 2 - score_text.get_width() // 2, 20))
 
                         pygame.display.flip()
-                        
-                        # Даем event loop время на обработку фоновой задачи (пауза ~60 FPS)
-                        await asyncio.sleep(1/FPS)
+                        await asyncio.sleep(0.016)
 
-                    # Отменяем фоновую задачу при выходе из игры
                     receive_task.cancel()
 
             except ConnectionRefusedError:
