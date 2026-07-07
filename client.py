@@ -1,168 +1,212 @@
+import pygame
 import asyncio
 import websockets
-import json
-import pygame
-import sys
 from websockets.protocol import State
+import json
+import sys
+import math
 
-# Server Constants Map & Screen Dimensions
-# X: -200 to 200 (width = 400)
-# Y: -300 to 300 (height = 600)
-WIDTH = 400
-HEIGHT = 600
-FPS = 60
-PLAYER_RADIUS = 50
+
+# Константы (основанные на сервере)
+SERVER_LEFT_WALL = -200.0
+SERVER_RIGHT_WALL = 200.0
+SERVER_DOWN_WALL = -300.0
+SERVER_TOP_WALL = 300.0
+
 PUCK_RADIUS = 20
+PLAYER_RADIUS = 50
 
-# Colors for a simple, clean design
-WHITE = (245, 245, 245)
-BLACK = (40, 40, 40)
-RED = (235, 87, 87)
-BLUE = (45, 156, 219)
-GREEN = (39, 174, 96)
-LINE_COLOR = (200, 200, 200)
+# Размеры окна Pygame
+SCREEN_WIDTH = int(SERVER_RIGHT_WALL - SERVER_LEFT_WALL)   # 400
+SCREEN_HEIGHT = int(SERVER_TOP_WALL - SERVER_DOWN_WALL)    # 600
 
-# Global Game State (Defaults)
-game_state = {
-    "puck": {"first": 0, "second": 0},
-    "player1": {"first": 0, "second": -150},
-    "player2": {"first": 0, "second": 150},
-    "score": {"first": 0, "second": 0}
-}
+# Цвета
+COLOR_BG = (240, 248, 255)
+COLOR_LINE = (100, 100, 100)
+COLOR_PLAYER1 = (30, 144, 255)  # Ваш игрок (Синий)
+COLOR_PLAYER2 = (220, 20, 60)   # Оппонент (Красный)
+COLOR_PUCK = (50, 50, 50)
+COLOR_TEXT = (0, 0, 0)
+COLOR_BUTTON = (46, 204, 113)
+COLOR_BUTTON_HOVER = (39, 174, 96)
 
-def to_screen(x, y):
-    # Maps Server coordinates to PyGame screen coordinates
-    # Server: (0,0) is center, Y increases upwards
-    # Screen: (0,0) is top-left, Y increases downwards
-    return int(x + 200), int(300 - y)
+FPS = 120
 
-def to_server(x, y):
-    # Maps PyGame screen coordinates back to Server coordinates
-    return float(x - 200), float(300 - y)
+def to_server_coords(screen_x, screen_y):
+    """Преобразует координаты экрана Pygame в систему координат сервера."""
+    server_x = screen_x + SERVER_LEFT_WALL
+    server_y = SERVER_TOP_WALL - screen_y
+    return float(server_x), float(server_y)
 
-async def receive_data(ws):
-    global game_state
-    try:
-        async for message in ws:
-            try:
-                data = json.loads(message)
-                if data.get("type") == "GameState":
-                    state_data = data.get("data", {})
-                    # Update local state with server truth
-                    if "puck" in state_data:
-                        game_state["puck"] = state_data["puck"]["position"]
-                    if "player1" in state_data:
-                        game_state["player1"] = state_data["player1"]["position"]
-                    if "player2" in state_data:
-                        game_state["player2"] = state_data["player2"]["position"]
-                    if "score" in state_data:
-                        game_state["score"] = state_data["score"]
-            except json.JSONDecodeError:
-                pass
-    except websockets.exceptions.ConnectionClosed:
-        print("Connection closed by server.")
-    except Exception as e:
-        print(f"Error receiving data: {e}")
+def to_screen_coords(server_x, server_y):
+    """Преобразует координаты сервера обратно в систему координат экрана."""
+    screen_x = server_x - SERVER_LEFT_WALL
+    screen_y = SERVER_TOP_WALL - server_y
+    return int(screen_x), int(screen_y)
 
-async def main(server_uri="wss://practice2026-qw8b.onrender.com/ws_connect"):
+async def main():
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Air Hockey - Client")
+    font = pygame.font.Font(None, 48)
+    small_font = pygame.font.Font(None, 36)
+
+    uri = "wss://practice2026-qw8b.onrender.com/ws_connect"
     
-    font = pygame.font.SysFont("Arial", 48, bold=True)
-    small_font = pygame.font.SysFont("Arial", 16)
+    # Состояние приложения: "MENU" -> "CONNECTING" -> "PLAYING"
+    app_state = "MENU"
 
-    ws = None
-    try:
-        print(f"Connecting to {server_uri}...")
-        ws = await websockets.connect(server_uri)
-        # Run receiver in the background
-        asyncio.create_task(receive_data(ws))
-        print("Connected!")
-    except Exception as e:
-        print(f"Could not connect to server: {e}")
-        print("Running in offline/render-only mode.")
-
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-
-        # Input Handling
-        mx, my = pygame.mouse.get_pos()
-        
-        # Constrain mouse strictly to the user's (bottom) half of the field
-        # The user's center point cannot cross the middle line
-        if my < HEIGHT // 2 + PLAYER_RADIUS:
-            my = HEIGHT // 2 + PLAYER_RADIUS
+    while True:
+        if app_state == "MENU":
+            mouse_pos = pygame.mouse.get_pos()
+            button_rect = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT // 2 - 40, 200, 80)
             
-        sx, sy = to_server(mx, my)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                # Если нажали ЛКМ в меню
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if button_rect.collidepoint(event.pos):
+                        app_state = "CONNECTING"
 
-        # Transmit latest position to the server
-        if ws and ws.state == State.OPEN:
+            screen.fill(COLOR_BG)
+            
+            # Эффект наведения на кнопку
+            btn_color = COLOR_BUTTON_HOVER if button_rect.collidepoint(mouse_pos) else COLOR_BUTTON
+            pygame.draw.rect(screen, btn_color, button_rect, border_radius=15)
+            
+            text = font.render("1 vs 1", True, (255, 255, 255))
+            screen.blit(text, (button_rect.centerx - text.get_width() // 2, button_rect.centery - text.get_height() // 2))
+            
+            pygame.display.flip()
+            await asyncio.sleep(1/FPS)
+
+        elif app_state == "CONNECTING":
+            screen.fill(COLOR_BG)
+            wait_text = small_font.render("Подключение к серверу...", True, COLOR_TEXT)
+            screen.blit(wait_text, (SCREEN_WIDTH // 2 - wait_text.get_width() // 2, SCREEN_HEIGHT // 2))
+            pygame.display.flip()
+
             try:
-                await ws.send(json.dumps({
-                    "position": {"x": sx, "y": sy}
-                }))
-            except:
-                pass
+                async with websockets.connect(uri) as websocket:
+                    print("Успешное подключение! Ожидание второго игрока...")
+                    app_state = "PLAYING"
+                    
+                    game_state = {
+                        "player1": {"position": {"first": 0.0, "second": -200.0}},
+                        "player2": {"position": {"first": 0.0, "second": 200.0}},
+                        "puck": {"position": {"first": 0.0, "second": 0.0}},
+                        "score": {"first": 0, "second": 0}
+                    }
+                    is_dragging = False
 
-        # === Rendering ===
-        screen.fill(WHITE)
-        
-        # Draw Table features (center line, center circle)
-        pygame.draw.line(screen, LINE_COLOR, (0, HEIGHT//2), (WIDTH, HEIGHT//2), 4)
-        pygame.draw.circle(screen, LINE_COLOR, (WIDTH//2, HEIGHT//2), 60, 4)
-        
-        # Draw Goals (-100 to 100 in server X)
-        g_left, _ = to_screen(-100, 0)
-        g_right, _ = to_screen(100, 0)
-        pygame.draw.rect(screen, GREEN, (g_left, 0, g_right - g_left, 15)) # Opponent Goal
-        pygame.draw.rect(screen, GREEN, (g_left, HEIGHT-15, g_right - g_left, 15)) # User Goal
-        
-        # Fetch up-to-date positions
-        p1_pos = to_screen(game_state["player1"]["first"], game_state["player1"]["second"])
-        p2_pos = to_screen(game_state["player2"]["first"], game_state["player2"]["second"])
-        puck_pos = to_screen(game_state["puck"]["first"], game_state["puck"]["second"])
-        
-        # Draw Player 1 (User - Blue)
-        pygame.draw.circle(screen, BLUE, p1_pos, PLAYER_RADIUS)
-        pygame.draw.circle(screen, WHITE, p1_pos, PLAYER_RADIUS - 15, 3)
-        
-        # Draw Player 2 (Opponent - Red)
-        pygame.draw.circle(screen, RED, p2_pos, PLAYER_RADIUS)
-        pygame.draw.circle(screen, WHITE, p2_pos, PLAYER_RADIUS - 15, 3)
-        
-        # Draw Puck (Black)
-        pygame.draw.circle(screen, BLACK, puck_pos, PUCK_RADIUS)
-        pygame.draw.circle(screen, WHITE, puck_pos, PUCK_RADIUS - 8, 2)
-        
-        # Draw Score Overlay
-        score_p1 = game_state['score']['first']
-        score_p2 = game_state['score']['second']
-        
-        # Orient the score nicely: Opponent (top) - User (bottom)
-        score_text = font.render(f"{score_p2}   -   {score_p1}", True, LINE_COLOR)
-        screen.blit(score_text, (WIDTH//2 - score_text.get_width()//2, HEIGHT//2 - score_text.get_height()//2))
-        
-        if not ws or not ws.state == State.OPEN:
-            warn_text = small_font.render("Connecting/Offline", True, RED)
-            screen.blit(warn_text, (5, 5))
+                    # ---------------------------------------------------------
+                    # ФОНОВАЯ ЗАДАЧА ДЛЯ ЧТЕНИЯ ДАННЫХ
+                    # Она работает параллельно и больше не тормозит отрисовку
+                    # ---------------------------------------------------------
+                    async def receive_messages():
+                        try:
+                            async for message in websocket:
+                                data = json.loads(message)
+                                if data.get("type") == "GameState":
+                                    game_state.update(data["data"])
+                                elif data.get("type") == "Message":
+                                    print(f"Сообщение: {data.get('data')}")
+                        except websockets.exceptions.ConnectionClosed:
+                            print("Соединение разорвано. Возврат в меню.")
+                            
+                    # Запускаем чтение в фоне
+                    receive_task = asyncio.create_task(receive_messages())
 
-        pygame.display.flip()
-        
-        # Allow asyncio to process incoming packets and wait for the next frame
-        await asyncio.sleep(1 / FPS)
+                    # Основной игровой цикл
+                    while app_state == "PLAYING":
+                        # Проверяем, не закрылось ли соединение в фоновой задаче
+                        if receive_task.done():
+                            app_state = "MENU"
+                            break
 
-    if ws:
-        await ws.close()
-    pygame.quit()
-    sys.exit()
+                        # 1. Обработка событий Pygame
+                        for event in pygame.event.get():
+                            if event.type == pygame.QUIT:
+                                receive_task.cancel()
+                                pygame.quit()
+                                sys.exit()
+                            
+                            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                                mouse_x, mouse_y = event.pos
+                                p1_pos = game_state["player1"]["position"]
+                                p1_screen_x, p1_screen_y = to_screen_coords(p1_pos["first"], p1_pos["second"])
+                                
+                                distance = math.hypot(mouse_x - p1_screen_x, mouse_y - p1_screen_y)
+                                if distance <= PLAYER_RADIUS:
+                                    is_dragging = True
 
-if __name__ == '__main__':
-    # Ensure Windows uses a compatible event loop if applicable
-    if sys.platform == 'win32':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+                            if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                                is_dragging = False
+
+                        # 2. Логика отправки координат (теперь не тормозит)
+                        try:
+                            if is_dragging:
+                                mouse_x, mouse_y = pygame.mouse.get_pos()
+                                if mouse_y < SCREEN_HEIGHT // 2:
+                                    mouse_y = SCREEN_HEIGHT // 2
+
+                                server_x, server_y = to_server_coords(mouse_x, mouse_y)
+                                payload = {"position": {"x": server_x, "y": server_y}}
+                            else:
+                                p1_pos = game_state["player1"]["position"]
+                                payload = {"position": {"x": p1_pos["first"], "y": p1_pos["second"]}}
+
+                            if websocket.state == State.OPEN:
+                                await websocket.send(json.dumps(payload))
+                                
+                        except websockets.exceptions.ConnectionClosed:
+                            app_state = "MENU"
+                            break
+
+                        # 3. Отрисовка
+                        screen.fill(COLOR_BG)
+                        pygame.draw.line(screen, COLOR_LINE, (0, SCREEN_HEIGHT // 2), (SCREEN_WIDTH, SCREEN_HEIGHT // 2), 3)
+
+                        p1_pos = game_state["player1"]["position"]
+                        p2_pos = game_state["player2"]["position"]
+                        puck_pos = game_state["puck"]["position"]
+                        score = game_state["score"]
+
+                        # Player 1
+                        p1_x, p1_y = to_screen_coords(p1_pos["first"], p1_pos["second"])
+                        outline_width = 0 if is_dragging else 3
+                        pygame.draw.circle(screen, COLOR_PLAYER1, (p1_x, p1_y), PLAYER_RADIUS)
+                        pygame.draw.circle(screen, (0, 0, 139), (p1_x, p1_y), PLAYER_RADIUS, outline_width)
+
+                        # Player 2
+                        p2_x, p2_y = to_screen_coords(p2_pos["first"], p2_pos["second"])
+                        pygame.draw.circle(screen, COLOR_PLAYER2, (p2_x, p2_y), PLAYER_RADIUS)
+
+                        # Puck
+                        puck_x, puck_y = to_screen_coords(puck_pos["first"], puck_pos["second"])
+                        pygame.draw.circle(screen, COLOR_PUCK, (puck_x, puck_y), PUCK_RADIUS)
+
+                        # Score
+                        score_text = font.render(f"{score['first']} - {score['second']}", True, COLOR_TEXT)
+                        screen.blit(score_text, (SCREEN_WIDTH // 2 - score_text.get_width() // 2, 20))
+
+                        pygame.display.flip()
+                        
+                        # Даем event loop время на обработку фоновой задачи (пауза ~60 FPS)
+                        await asyncio.sleep(1/FPS)
+
+                    # Отменяем фоновую задачу при выходе из игры
+                    receive_task.cancel()
+
+            except ConnectionRefusedError:
+                print("Не удалось подключиться к серверу.")
+                app_state = "MENU"
+                await asyncio.sleep(1)
+            except Exception as e:
+                print(f"Ошибка: {e}")
+                app_state = "MENU"
+
+if __name__ == "__main__":
     asyncio.run(main())
-
