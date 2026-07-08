@@ -251,7 +251,7 @@ async def main():
                             screen.blit(score_text, (SCREEN_WIDTH // 2 - score_text.get_width() // 2, 20))
 
                         pygame.display.flip()
-                        await asyncio.sleep(0.016)
+                        await asyncio.sleep(1/120)
                 
                 # Отменяем фоновую задачу только после того, как сокет гарантированно закрыт
                 if not receive_task.done():
