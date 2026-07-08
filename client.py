@@ -186,7 +186,7 @@ async def main():
                             break
 
                         # 3. Физика биты
-                        MAX_SPEED = 5  # Максимальная скорость в пикселях за кадр
+                        MAX_SPEED = 7  # Максимальная скорость в пикселях за кадр
 
                         if is_dragging and connection_info["game_started"]:
                             mouse_x, mouse_y = pygame.mouse.get_pos()
