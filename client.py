@@ -185,15 +185,14 @@ async def main():
                         if app_state != "PLAYING":
                             break
 
-                        # 3. Физика биты
-                        MAX_SPEED = 25.0  # Максимальная скорость в пикселях за кадр
+                        # 3. Формирование координат для отправки (Без локальных коллизий!)
+                        MAX_SPEED = 25.0
 
                         if is_dragging and connection_info["game_started"]:
                             mouse_x, mouse_y = pygame.mouse.get_pos()
                             
                             dx = mouse_x - paddle_x
                             dy = mouse_y - paddle_y
-                            
                             distance = math.hypot(dx, dy)
                             
                             if distance > MAX_SPEED:
@@ -213,48 +212,14 @@ async def main():
                             if abs(paddle_vx) < 0.1: paddle_vx = 0
                             if abs(paddle_vy) < 0.1: paddle_vy = 0
 
-                        # Ограничения движения (стены)
-                        if paddle_x < PLAYER_RADIUS:
-                            paddle_x = PLAYER_RADIUS
-                            paddle_vx = 0
-                        elif paddle_x > SCREEN_WIDTH - PLAYER_RADIUS:
-                            paddle_x = SCREEN_WIDTH - PLAYER_RADIUS
-                            paddle_vx = 0
+                        if paddle_x < PLAYER_RADIUS: paddle_x = PLAYER_RADIUS
+                        elif paddle_x > SCREEN_WIDTH - PLAYER_RADIUS: paddle_x = SCREEN_WIDTH - PLAYER_RADIUS
                             
-                        if paddle_y < SCREEN_HEIGHT // 2 + PLAYER_RADIUS:
-                            paddle_y = SCREEN_HEIGHT // 2 + PLAYER_RADIUS
-                            paddle_vy = 0
-                        elif paddle_y > SCREEN_HEIGHT - PLAYER_RADIUS:
-                            paddle_y = SCREEN_HEIGHT - PLAYER_RADIUS
-                            paddle_vy = 0
+                        if paddle_y < SCREEN_HEIGHT // 2 + PLAYER_RADIUS: paddle_y = SCREEN_HEIGHT // 2 + PLAYER_RADIUS
+                        elif paddle_y > SCREEN_HEIGHT - PLAYER_RADIUS: paddle_y = SCREEN_HEIGHT - PLAYER_RADIUS
 
-                        # === НОВОЕ: Локальная коллизия с шайбой ===
-                        puck_pos = game_state["puck"]["position"]
-                        puck_screen_x, puck_screen_y = to_screen_coords(puck_pos["first"], puck_pos["second"])
-                        
-                        dist_to_puck = math.hypot(paddle_x - puck_screen_x, paddle_y - puck_screen_y)
-                        min_dist = PLAYER_RADIUS + PUCK_RADIUS
-                        
-                        if dist_to_puck < min_dist:
-                            # Вычисляем, насколько глубоко бита зашла в шайбу
-                            overlap = min_dist - dist_to_puck
-                            
-                            # Защита от деления на ноль при идеальном совпадении центров
-                            if dist_to_puck > 0:
-                                # Находим вектор от шайбы к бите (направление выталкивания биты)
-                                nx = (paddle_x - puck_screen_x) / dist_to_puck
-                                ny = (paddle_y - puck_screen_y) / dist_to_puck
-                                
-                                # Сдвигаем биту так, чтобы она только касалась шайбы, но не залезала в нее
-                                paddle_x += nx * overlap
-                                paddle_y += ny * overlap
-                                
-                                # Гасим вектор скорости, чтобы бита не дрожала
-                                paddle_vx = 0
-                                paddle_vy = 0
-                        # ==========================================
 
-                        # 4. Отправка пакетов
+                        # 4. Отправка пакетов на сервер
                         try:
                             server_x, server_y = to_server_coords(paddle_x, paddle_y)
                             payload = {"position": {"x": server_x, "y": server_y}}
@@ -263,21 +228,27 @@ async def main():
                         except websockets.exceptions.ConnectionClosed:
                             pass 
 
-                        # 5. Отрисовка
+
+                        # 5. Отрисовка (СТРОГО по данным сервера для обоих игроков)
                         screen.fill(COLOR_BG)
                         pygame.draw.line(screen, COLOR_LINE, (0, SCREEN_HEIGHT // 2), (SCREEN_WIDTH, SCREEN_HEIGHT // 2), 3)
 
+                        p1_pos = game_state["player1"]["position"]
                         p2_pos = game_state["player2"]["position"]
                         puck_pos = game_state["puck"]["position"]
                         score = game_state["score"]
 
+                        # Отрисовка Player 1 (Вы) - Теперь данные берутся из p1_pos (с сервера!)
+                        p1_x, p1_y = to_screen_coords(p1_pos["first"], p1_pos["second"])
                         outline_width = 0 if is_dragging else 3
-                        pygame.draw.circle(screen, COLOR_PLAYER1, (int(paddle_x), int(paddle_y)), PLAYER_RADIUS)
-                        pygame.draw.circle(screen, (0, 0, 139), (int(paddle_x), int(paddle_y)), PLAYER_RADIUS, outline_width)
+                        pygame.draw.circle(screen, COLOR_PLAYER1, (p1_x, p1_y), PLAYER_RADIUS)
+                        pygame.draw.circle(screen, (0, 0, 139), (p1_x, p1_y), PLAYER_RADIUS, outline_width)
 
+                        # Отрисовка Player 2
                         p2_x, p2_y = to_screen_coords(p2_pos["first"], p2_pos["second"])
                         pygame.draw.circle(screen, COLOR_PLAYER2, (p2_x, p2_y), PLAYER_RADIUS)
 
+                        # Отрисовка Шайбы
                         puck_x, puck_y = to_screen_coords(puck_pos["first"], puck_pos["second"])
                         pygame.draw.circle(screen, COLOR_PUCK, (puck_x, puck_y), PUCK_RADIUS)
 
