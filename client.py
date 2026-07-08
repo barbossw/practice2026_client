@@ -186,7 +186,7 @@ async def main():
                             break
 
                         # 3. Физика биты
-                        MAX_SPEED = 20  # Максимальная скорость в пикселях за кадр
+                        MAX_SPEED = 2  # Максимальная скорость в пикселях за кадр
 
                         if is_dragging and connection_info["game_started"]:
                             mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -270,7 +270,7 @@ async def main():
                             screen.blit(score_text, (SCREEN_WIDTH // 2 - score_text.get_width() // 2, 20))
 
                         pygame.display.flip()
-                        await asyncio.sleep(1/120)
+                        await asyncio.sleep(1/FPS)
                 
                 # Отменяем фоновую задачу только после того, как сокет гарантированно закрыт
                 if not receive_task.done():
@@ -308,7 +308,7 @@ async def main():
                 screen.blit(return_text, (SCREEN_WIDTH // 2 - return_text.get_width() // 2, SCREEN_HEIGHT // 2 + 20))
                 
                 pygame.display.flip()
-                await asyncio.sleep(1/120) # Пауза в 1 кадр
+                await asyncio.sleep(1/FPS)  # Пауза в 1 кадр
             
             # После 2 секунд плавно возвращаемся в меню
             app_state = "MENU"
