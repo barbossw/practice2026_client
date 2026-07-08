@@ -186,13 +186,31 @@ async def main():
                             break
 
                         # 3. Физика биты
+                        MAX_SPEED = 25.0  # Максимальная скорость в пикселях за кадр
+
                         if is_dragging and connection_info["game_started"]:
                             mouse_x, mouse_y = pygame.mouse.get_pos()
-                            paddle_vx = mouse_x - paddle_x
-                            paddle_vy = mouse_y - paddle_y
-                            paddle_x = mouse_x
-                            paddle_y = mouse_y
+                            
+                            # Вычисляем разницу между мышкой и текущей позицией биты
+                            dx = mouse_x - paddle_x
+                            dy = mouse_y - paddle_y
+                            
+                            # Вычисляем дистанцию (скорость)
+                            distance = math.hypot(dx, dy)
+                            
+                            # Если мы дернули мышкой слишком быстро, ограничиваем вектор
+                            if distance > MAX_SPEED:
+                                dx = (dx / distance) * MAX_SPEED
+                                dy = (dy / distance) * MAX_SPEED
+                            
+                            paddle_vx = dx
+                            paddle_vy = dy
+                            
+                            # Прибавляем ограниченное перемещение к позиции биты
+                            paddle_x += paddle_vx
+                            paddle_y += paddle_vy
                         else:
+                            # Инерция при отпущенной кнопке
                             paddle_x += paddle_vx
                             paddle_y += paddle_vy
                             paddle_vx *= 0.92
@@ -200,7 +218,7 @@ async def main():
                             if abs(paddle_vx) < 0.1: paddle_vx = 0
                             if abs(paddle_vy) < 0.1: paddle_vy = 0
 
-                        # Ограничения движения
+                        # Ограничения движения (стены)
                         if paddle_x < PLAYER_RADIUS:
                             paddle_x = PLAYER_RADIUS
                             paddle_vx = 0
@@ -208,6 +226,7 @@ async def main():
                             paddle_x = SCREEN_WIDTH - PLAYER_RADIUS
                             paddle_vx = 0
                             
+                        # Ограничение по центру поля (чтобы не заходить на чужую половину)
                         if paddle_y < SCREEN_HEIGHT // 2 + PLAYER_RADIUS:
                             paddle_y = SCREEN_HEIGHT // 2 + PLAYER_RADIUS
                             paddle_vy = 0
